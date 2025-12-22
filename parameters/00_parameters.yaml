@@ -1,3 +1,4 @@
 template-file-path: DynamoDB_template.yaml
-parameters: {}
+parameters:
+  BucketName: kakeibo-bucket-1123
 tags: {}

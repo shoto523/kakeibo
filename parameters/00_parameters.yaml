@@ -1,2 +1,3 @@
+template-file-path: s3_template.yaml
 Parameters:
   BucketName: kakeibo-bucket-1123

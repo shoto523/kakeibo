@@ -1,6 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: S3 Static Website Hosting
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket for website hosting
+
 Resources:
-  S3Bucket:
-    Type: 'AWS::S3::Bucket'
-    DeletionPolicy: Retain
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
     Properties:
-      BucketName: kakeibo-bucket-1123
+      BucketName: !Ref BucketName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${WebsiteBucket.Arn}/*"
+
+Outputs:
+  WebsiteURL:
+    Description: URL of the S3 static website
+    Value: !GetAtt WebsiteBucket.WebsiteURL

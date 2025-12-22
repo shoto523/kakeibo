@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 家計簿用 API Gateway
+
+Resources:
+  KakeiboApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: KakeiboApi
+
+  KakeiboApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref KakeiboApi
+      ParentId: !GetAtt KakeiboApi.RootResourceId
+      PathPart: kakeibo
+
+  KakeiboApiAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuthorizer
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      RestApiId: !Ref KakeiboApi
+      ProviderARNs:
+        - !ImportValue KakeiboUserPoolId
+
+  KakeiboApiMethodGet:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref KakeiboApi
+      ResourceId: !Ref KakeiboApiResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref KakeiboApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KakeiboLambdaArn}/invocations
+
+  KakeiboApiMethodPost:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref KakeiboApi
+      ResourceId: !Ref KakeiboApiResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref KakeiboApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KakeiboLambdaArn}/invocations
+
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue KakeiboLambdaArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${KakeiboApi}/*/*/kakeibo
+
+Outputs:
+  ApiEndpoint:
+    Value: !Sub https://${KakeiboApi}.execute-api.${AWS::Region}.amazonaws.com/prod/kakeibo
+    Export:
+      Name: KakeiboApiEndpoint

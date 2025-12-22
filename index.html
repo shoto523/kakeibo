@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>家計簿アプリ</title>
+<style>
+body { font-family: Arial; max-width: 700px; margin: auto; padding: 20px; }
+table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+th, td { border: 1px solid #ccc; padding: 8px; }
+th { background-color: #f0f0f0; }
+input, button { padding: 5px; margin: 5px 0; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js@5.2.7/dist/amazon-cognito-identity.min.js"></script>
+</head>
+<body>
+<h1>家計簿アプリ</h1>
+
+<div id="login-section">
+    <h2>ログイン</h2>
+    <input type="text" id="username" placeholder="ユーザー名"><br>
+    <input type="password" id="password" placeholder="パスワード"><br>
+    <button onclick="login()">ログイン</button>
+    <p id="login-msg" style="color:red;"></p>
+</div>
+
+<div id="app-section" style="display:none;">
+    <h2>家計簿 - <span id="current-user"></span></h2>
+    <input type="date" id="date">
+    <input type="text" id="item" placeholder="項目">
+    <input type="number" id="amount" placeholder="金額">
+    <button onclick="addEntry()">追加</button>
+
+    <table>
+        <thead>
+            <tr><th>日付</th><th>項目</th><th>金額</th></tr>
+        </thead>
+        <tbody id="entries"></tbody>
+    </table>
+    <button onclick="logout()">ログアウト</button>
+</div>
+
+<script>
+// --- Cognito 設定 ---
+const poolData = {
+    UserPoolId: 'YOUR_USER_POOL_ID', // Cognito User Pool ID
+    ClientId: 'YOUR_APP_CLIENT_ID'   // Cognito App Client ID
+};
+const userPool = new AmazonCognitoIdentity.CognitoUserPool(poolData);
+let currentUser = null;
+
+// --- ログイン ---
+function login() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value.trim();
+    if (!username || !password) { document.getElementById('login-msg').innerText = '入力してください'; return; }
+
+    const authDetails = new AmazonCognitoIdentity.AuthenticationDetails({ Username: username, Password: password });
+    const userData = { Username: username, Pool: userPool };
+    const cognitoUser = new AmazonCognitoIdentity.CognitoUser(userData);
+
+    cognitoUser.authenticateUser(authDetails, {
+        onSuccess: function(result) {
+            currentUser = cognitoUser;
+            document.getElementById('login-section').style.display = 'none';
+            document.getElementById('app-section').style.display = 'block';
+            document.getElementById('current-user').innerText = username;
+            loadEntries(result.getIdToken().getJwtToken());
+        },
+        onFailure: function(err) {
+            document.getElementById('login-msg').innerText = err.message || JSON.stringify(err);
+        }
+    });
+}
+
+// --- ログアウト ---
+function logout() {
+    if (currentUser) currentUser.signOut();
+    currentUser = null;
+    document.getElementById('login-section').style.display = 'block';
+    document.getElementById('app-section').style.display = 'none';
+}
+
+// --- Lambda API 設定 ---
+const API_ENDPOINT = 'https://YOUR_API_GATEWAY_ENDPOINT/kakeibo'; // Lambda連携API
+
+async function loadEntries(token) {
+    try {
+        const res = await fetch(API_ENDPOINT + '/list', {
+            method: 'GET',
+            headers: { 'Authorization': token }
+        });
+        const data = await res.json();
+        renderEntries(data);
+    } catch (err) {
+        console.error(err);
+        alert('データ取得に失敗しました');
+    }
+}
+
+async function addEntry() {
+    const date = document.getElementById('date').value;
+    const item = document.getElementById('item').value.trim();
+    const amount = parseInt(document.getElementById('amount').value);
+    if (!date || !item || isNaN(amount)) { alert('入力してください'); return; }
+
+    const token = currentUser.getSignInUserSession().getIdToken().getJwtToken();
+    try {
+        const res = await fetch(API_ENDPOINT + '/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': token
+            },
+            body: JSON.stringify({ date, item, amount })
+        });
+        const data = await res.json();
+        renderEntries(data);
+        document.getElementById('date').value = '';
+        document.getElementById('item').value = '';
+        document.getElementById('amount').value = '';
+    } catch (err) {
+        console.error(err);
+        alert('データ追加に失敗しました');
+    }
+}
+
+// --- 表示 ---
+function renderEntries(entries) {
+    const tbody = document.getElementById('entries');
+    tbody.innerHTML = '';
+    entries.forEach(e => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${e.date}</td><td>${e.item}</td><td>${e.amount}</td>`;
+        tbody.appendChild(tr);
+    });
+}
+</script>
+</body>
+</html>

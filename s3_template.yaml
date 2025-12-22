@@ -1,11 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: S3 Static Website Hosting
 
-Parameters:
-  BucketName:
-    Type: String
-    Description: Name of the S3 bucket for website hosting
-
 Resources:
   WebsiteBucket:
     Type: AWS::S3::Bucket

@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 家計簿用 Lambda 関数と IAM ロール
+
+Parameters:
+  ExistingS3BucketName:
+    Type: String
+    Description: "既存 S3 バケット名（ImportValue またはパラメータ指定）"
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: KakeiboLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                Resource: !ImportValue KakeiboTableName
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${ExistingS3BucketName}/*"
+
+  KakeiboLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: KakeiboLambda
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !ImportValue KakeiboTableName
+          S3_BUCKET_NAME: !Ref ExistingS3BucketName
+      Code:
+        ZipFile: |
+          import json, boto3, os
+          from boto3.dynamodb.conditions import Key
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
+          s3_bucket = os.environ['S3_BUCKET_NAME']
+
+          def handler(event, context):
+              userId = event['requestContext']['authorizer']['claims']['sub']
+              method = event['httpMethod']
+              if method == 'GET':
+                  resp = table.query(KeyConditionExpression=Key('userId').eq(userId))
+                  return {'statusCode':200,'body':json.dumps(resp['Items'])}
+              elif method == 'POST':
+                  body = json.loads(event['body'])
+                  import uuid
+                  entryId = str(uuid.uuid4())
+                  table.put_item(Item={'userId': userId, 'entryId': entryId, 'date': body['date'], 'item': body['item'], 'amount': body['amount']})
+                  resp = table.query(KeyConditionExpression=Key('userId').eq(userId))
+                  return {'statusCode':200,'body':json.dumps(resp['Items'])}
+              else:
+                  return {'statusCode':400,'body':'Unsupported method'}
+
+Outputs:
+  LambdaArn:
+    Value: !GetAtt KakeiboLambda.Arn
+    Export:
+      Name: KakeiboLambdaArn

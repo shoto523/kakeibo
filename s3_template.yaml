@@ -1,11 +1,16 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: S3 Static Website Hosting
 
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket for website hosting
+
 Resources:
   WebsiteBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: kakeibo-bucket-1123
+      BucketName: !Ref BucketName
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: error.html

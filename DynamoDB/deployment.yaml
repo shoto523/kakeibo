@@ -1,0 +1,5 @@
+cloudformation:
+  template: DynamoDB/template.yaml
+  parameters: DynamoDB/parameter.yaml
+  stackName: kakeibo-stack
+  region: ap-northeast-1

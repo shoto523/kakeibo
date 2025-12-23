@@ -1,5 +1,4 @@
 cloudformation:
   template: DynamoDB/template.yaml
-  parameters: Null
   stackName: testest
   region: ap-northeast-1

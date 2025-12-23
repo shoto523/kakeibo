@@ -1,3 +1,4 @@
 template-file-path: dynamo_template.yaml
-parameters: []
+parameters:
+  BucketName: kakeibo-bucket-1123
 tags: {}

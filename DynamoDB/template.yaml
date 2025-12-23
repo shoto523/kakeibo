@@ -1,4 +1,25 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Description: 家計簿用 DynamoDB テーブル
 Resources:
-  DummyBucket:
-    Type: AWS::S3::Bucket
+  KakeiboTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: KakeiboTable
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: entryId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: entryId
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+Outputs:
+  TableName:
+    Description: "DynamoDB テーブル名"
+    Value: !Ref KakeiboTable
+    Export:
+      Name: KakeiboTableName

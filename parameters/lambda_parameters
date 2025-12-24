@@ -1,0 +1,4 @@
+template-file-path: Lambda_template.yaml
+parameters:
+  BucketName: kakeibo-bucket-1123
+tags: {}

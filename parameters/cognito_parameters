@@ -1,0 +1,3 @@
+template-file-path: Cognito_template.yaml
+parameters:
+tags: {}

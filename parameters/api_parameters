@@ -1,0 +1,3 @@
+template-file-path: ApiGateway_template.yaml
+parameters:
+tags: {}

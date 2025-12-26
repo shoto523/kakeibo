@@ -1,11 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 家計簿用 Lambda 関数と IAM ロール
 
-Parameters:
-  ExistingS3BucketName:
-    Type: String
-    Description: "既存 S3 バケット名（ImportValue またはパラメータ指定）"
-
 Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -34,7 +29,9 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub "arn:aws:s3:::${ExistingS3BucketName}/*"
+                Resource: !Sub
+                  - "arn:aws:s3:::${ExistingS3BucketName}/*"
+                  - BucketName: !ImportValue ExistingS3BucketName
 
   KakeiboLambda:
     Type: AWS::Lambda::Function

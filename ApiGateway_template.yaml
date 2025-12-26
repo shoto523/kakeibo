@@ -21,9 +21,10 @@ Resources:
       Type: COGNITO_USER_POOLS
       IdentitySource: method.request.header.Authorization
       RestApiId: !Ref KakeiboApi
-      ProviderARNs: - !Sub
-        - arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}
-        - UserPoolId: !ImportValue KakeiboUserPoolId
+      ProviderARNs:
+        - !Sub
+          - arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}
+          - UserPoolId: !ImportValue KakeiboUserPoolId
 
   KakeiboApiMethodGet:
     Type: AWS::ApiGateway::Method

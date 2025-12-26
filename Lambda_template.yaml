@@ -31,7 +31,7 @@ Resources:
                   - s3:PutObject
                 Resource: !Sub
                   - "arn:aws:s3:::${ExistingS3BucketName}/*"
-                  - BucketName: !ImportValue ExistingS3BucketName
+                  - ExistingS3BucketName: !ImportValue KakeiboBucket-Name
 
   KakeiboLambda:
     Type: AWS::Lambda::Function
@@ -43,7 +43,7 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !ImportValue KakeiboTableName
-          S3_BUCKET_NAME: !Ref ExistingS3BucketName
+          S3_BUCKET_NAME: !ImportValue KakeiboBucket-Name
       Code:
         ZipFile: |
           import json, boto3, os

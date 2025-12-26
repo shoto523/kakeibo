@@ -35,7 +35,9 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KakeiboLambdaArn}/invocations
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KakeiboLambdaArn}/invocations
+          - KakeiboLambdaArn: !ImportValue KakeiboLambdaArn
 
   KakeiboApiMethodPost:
     Type: AWS::ApiGateway::Method
@@ -48,7 +50,9 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KakeiboLambdaArn}/invocations
+        Uri:
+          - !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KakeiboLambdaArn}/invocations
+          - KakeiboLambdaArn: !ImportValue KakeiboLambdaArn
 
   LambdaApiPermission:
     Type: AWS::Lambda::Permission

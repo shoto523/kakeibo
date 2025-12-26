@@ -24,7 +24,8 @@ Resources:
                 Action:
                   - dynamodb:Query
                   - dynamodb:PutItem
-                Resource: !ImportValue KakeiboTableName
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}"
+                  TableName: !ImportValue KakeiboTableName
               - Effect: Allow
                 Action:
                   - s3:GetObject

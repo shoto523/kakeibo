@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 家計簿用 Lambda 関数と IAM ロール
+Description: 家計簿用 Lambda 関数と IAM ロール（CORS対応・LambdaプロキシON）
 
 Resources:
   LambdaExecutionRole:
@@ -27,13 +27,6 @@ Resources:
                 Resource: !Sub
                   - "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}"
                   - TableName: !ImportValue KakeiboTableName
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource: !Sub
-                  - "arn:aws:s3:::${ExistingS3BucketName}/*"
-                  - ExistingS3BucketName: !ImportValue KakeiboBucket-Name
 
   KakeiboLambda:
     Type: AWS::Lambda::Function
@@ -45,30 +38,87 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !ImportValue KakeiboTableName
-          S3_BUCKET_NAME: !ImportValue KakeiboBucket-Name
       Code:
         ZipFile: |
-          import json, boto3, os
+          import json
+          import boto3
+          import os
+          import uuid
           from boto3.dynamodb.conditions import Key
-          dynamodb = boto3.resource('dynamodb')
-          table = dynamodb.Table(os.environ['TABLE_NAME'])
-          s3_bucket = os.environ['S3_BUCKET_NAME']
+
+          dynamodb = boto3.resource("dynamodb")
+          table = dynamodb.Table(os.environ["TABLE_NAME"])
+
+          # ★ LambdaプロキシON時はここでCORSを返すのが唯一の正解
+          CORS_HEADERS = {
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Headers": "Content-Type,Authorization",
+              "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
+          }
 
           def handler(event, context):
-              userId = event['requestContext']['authorizer']['claims']['sub']
-              method = event['httpMethod']
-              if method == 'GET':
-                  resp = table.query(KeyConditionExpression=Key('userId').eq(userId))
-                  return {'statusCode':200,'body':json.dumps(resp['Items'])}
-              elif method == 'POST':
-                  body = json.loads(event['body'])
-                  import uuid
-                  entryId = str(uuid.uuid4())
-                  table.put_item(Item={'userId': userId, 'entryId': entryId, 'date': body['date'], 'item': body['item'], 'amount': body['amount']})
-                  resp = table.query(KeyConditionExpression=Key('userId').eq(userId))
-                  return {'statusCode':200,'body':json.dumps(resp['Items'])}
-              else:
-                  return {'statusCode':400,'body':'Unsupported method'}
+              try:
+                  method = event.get("httpMethod")
+
+                  # preflight（OPTIONS）
+                  if method == "OPTIONS":
+                      return {
+                          "statusCode": 200,
+                          "headers": CORS_HEADERS,
+                          "body": ""
+                      }
+
+                  userId = event["requestContext"]["authorizer"]["claims"]["sub"]
+
+                  # 一覧取得
+                  if method == "GET":
+                      resp = table.query(
+                          KeyConditionExpression=Key("userId").eq(userId)
+                      )
+                      return {
+                          "statusCode": 200,
+                          "headers": CORS_HEADERS,
+                          "body": json.dumps(resp.get("Items", []))
+                      }
+
+                  # 追加
+                  elif method == "POST":
+                      body = json.loads(event.get("body", "{}"))
+                      entryId = str(uuid.uuid4())
+
+                      table.put_item(
+                          Item={
+                              "userId": userId,
+                              "entryId": entryId,
+                              "date": body.get("date"),
+                              "item": body.get("item"),
+                              "amount": body.get("amount")
+                          }
+                      )
+
+                      resp = table.query(
+                          KeyConditionExpression=Key("userId").eq(userId)
+                      )
+
+                      return {
+                          "statusCode": 200,
+                          "headers": CORS_HEADERS,
+                          "body": json.dumps(resp.get("Items", []))
+                      }
+
+                  else:
+                      return {
+                          "statusCode": 400,
+                          "headers": CORS_HEADERS,
+                          "body": "Unsupported method"
+                      }
+
+              except Exception as e:
+                  return {
+                      "statusCode": 500,
+                      "headers": CORS_HEADERS,
+                      "body": json.dumps({"error": str(e)})
+                  }
 
 Outputs:
   LambdaArn:

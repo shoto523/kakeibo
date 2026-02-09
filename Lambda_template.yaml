@@ -24,6 +24,7 @@ Resources:
                 Action:
                   - dynamodb:Query
                   - dynamodb:PutItem
+                  - dynamodb:DeleteItem   # ★ 追加
                 Resource: !Sub
                   - "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}"
                   - TableName: !ImportValue KakeiboTableName
@@ -53,24 +54,23 @@ Resources:
           CORS_HEADERS = {
               "Access-Control-Allow-Origin": "*",
               "Access-Control-Allow-Headers": "Content-Type,Authorization",
-              "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
+              "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE"  # ★ DELETE追加
           }
 
-          # Decimal を JSON 化できる形に変換
           def convert_decimal(obj):
               if isinstance(obj, list):
                   return [convert_decimal(i) for i in obj]
               if isinstance(obj, dict):
                   return {k: convert_decimal(v) for k, v in obj.items()}
               if isinstance(obj, Decimal):
-                  return int(obj)  # 金額は int 扱い
+                  return int(obj)
               return obj
 
           def handler(event, context):
               try:
                   method = event.get("httpMethod")
 
-                  # preflight（OPTIONS）
+                  # preflight
                   if method == "OPTIONS":
                       return {
                           "statusCode": 200,
@@ -80,7 +80,9 @@ Resources:
 
                   userId = event["requestContext"]["authorizer"]["claims"]["sub"]
 
+                  # =======================
                   # 一覧取得
+                  # =======================
                   if method == "GET":
                       resp = table.query(
                           KeyConditionExpression=Key("userId").eq(userId)
@@ -92,7 +94,9 @@ Resources:
                           "body": json.dumps(items)
                       }
 
+                  # =======================
                   # 追加
+                  # =======================
                   elif method == "POST":
                       body = json.loads(event.get("body", "{}"))
                       entryId = str(uuid.uuid4())
@@ -116,6 +120,32 @@ Resources:
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
                           "body": json.dumps(items)
+                      }
+
+                  # =======================
+                  # ★ 削除
+                  # =======================
+                  elif method == "DELETE":
+                      entryId = event.get("pathParameters", {}).get("id")
+
+                      if not entryId:
+                          return {
+                              "statusCode": 400,
+                              "headers": CORS_HEADERS,
+                              "body": json.dumps({"error": "id is required"})
+                          }
+
+                      table.delete_item(
+                          Key={
+                              "userId": userId,
+                              "entryId": entryId
+                          }
+                      )
+
+                      return {
+                          "statusCode": 200,
+                          "headers": CORS_HEADERS,
+                          "body": json.dumps({"message": "deleted"})
                       }
 
                   else:

@@ -45,16 +45,26 @@ Resources:
           import os
           import uuid
           from boto3.dynamodb.conditions import Key
+          from decimal import Decimal
 
           dynamodb = boto3.resource("dynamodb")
           table = dynamodb.Table(os.environ["TABLE_NAME"])
 
-          # ★ LambdaプロキシON時はここでCORSを返すのが唯一の正解
           CORS_HEADERS = {
               "Access-Control-Allow-Origin": "*",
               "Access-Control-Allow-Headers": "Content-Type,Authorization",
               "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
           }
+
+          # Decimal を JSON 化できる形に変換
+          def convert_decimal(obj):
+              if isinstance(obj, list):
+                  return [convert_decimal(i) for i in obj]
+              if isinstance(obj, dict):
+                  return {k: convert_decimal(v) for k, v in obj.items()}
+              if isinstance(obj, Decimal):
+                  return int(obj)  # 金額は int 扱い
+              return obj
 
           def handler(event, context):
               try:
@@ -75,10 +85,11 @@ Resources:
                       resp = table.query(
                           KeyConditionExpression=Key("userId").eq(userId)
                       )
+                      items = convert_decimal(resp.get("Items", []))
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(resp.get("Items", []))
+                          "body": json.dumps(items)
                       }
 
                   # 追加
@@ -92,18 +103,19 @@ Resources:
                               "entryId": entryId,
                               "date": body.get("date"),
                               "item": body.get("item"),
-                              "amount": body.get("amount")
+                              "amount": Decimal(str(body.get("amount")))
                           }
                       )
 
                       resp = table.query(
                           KeyConditionExpression=Key("userId").eq(userId)
                       )
+                      items = convert_decimal(resp.get("Items", []))
 
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(resp.get("Items", []))
+                          "body": json.dumps(items)
                       }
 
                   else:
@@ -114,6 +126,8 @@ Resources:
                       }
 
               except Exception as e:
+                  import traceback
+                  print(traceback.format_exc())
                   return {
                       "statusCode": 500,
                       "headers": CORS_HEADERS,

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL (GET/POST/DELETE unified)
+Description: Kakeibo Lambda FINAL (HTTP API v2 routeKey対応)
 
 Resources:
   LambdaExecutionRole:
@@ -47,7 +47,6 @@ Resources:
           import uuid
           from boto3.dynamodb.conditions import Key
           from decimal import Decimal
-          from botocore.exceptions import ClientError
 
           dynamodb = boto3.resource("dynamodb")
           table = dynamodb.Table(os.environ["TABLE_NAME"])
@@ -68,9 +67,25 @@ Resources:
               return obj
 
           def get_http_method(event):
+              # REST API
               if "httpMethod" in event:
                   return event["httpMethod"]
-              return event.get("requestContext", {}).get("http", {}).get("method")
+
+              # HTTP API v2
+              method = (
+                  event.get("requestContext", {})
+                       .get("http", {})
+                       .get("method")
+              )
+              if method:
+                  return method
+
+              # HTTP API v2 fallback (routeKey)
+              route_key = event.get("routeKey")
+              if route_key and " " in route_key:
+                  return route_key.split(" ")[0]
+
+              return None
 
           def get_items(userId):
               resp = table.query(
@@ -84,7 +99,7 @@ Resources:
                   method = get_http_method(event)
                   print("HTTP METHOD:", method)
 
-                  if method == "OPTIONS":
+                  if method is None or method == "OPTIONS":
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
@@ -104,7 +119,6 @@ Resources:
 
                   userId = claims["sub"]
 
-                  # ---------- GET ----------
                   if method == "GET":
                       return {
                           "statusCode": 200,
@@ -112,7 +126,6 @@ Resources:
                           "body": json.dumps(get_items(userId))
                       }
 
-                  # ---------- POST ----------
                   if method == "POST":
                       body = json.loads(event.get("body") or "{}")
                       table.put_item(
@@ -130,7 +143,6 @@ Resources:
                           "body": json.dumps(get_items(userId))
                       }
 
-                  # ---------- DELETE ----------
                   if method == "DELETE":
                       entryId = (event.get("pathParameters") or {}).get("id")
                       if not entryId:
@@ -140,23 +152,12 @@ Resources:
                               "body": json.dumps({"error": "id is required"})
                           }
 
-                      resp = table.delete_item(
+                      table.delete_item(
                           Key={
                               "userId": userId,
                               "entryId": entryId
-                          },
-                          ReturnValues="ALL_OLD"
-                      )
-
-                      deleted = resp.get("Attributes")
-                      print("DELETED ITEM:", deleted)
-
-                      if not deleted:
-                          return {
-                              "statusCode": 404,
-                              "headers": CORS_HEADERS,
-                              "body": json.dumps({"error": "Item not found"})
                           }
+                      )
 
                       return {
                           "statusCode": 200,

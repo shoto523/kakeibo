@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL (登録者本人のみ削除可)
+Description: Kakeibo Lambda FINAL (Cognitoグループ単位で共有 / 登録者本人のみ削除可)
 
 Resources:
   LambdaExecutionRole:
@@ -68,9 +68,11 @@ Resources:
               return obj
 
           def get_http_method(event):
+              # REST API
               if "httpMethod" in event:
                   return event["httpMethod"]
 
+              # HTTP API v2
               method = (
                   event.get("requestContext", {})
                        .get("http", {})
@@ -79,15 +81,34 @@ Resources:
               if method:
                   return method
 
+              # HTTP API v2 fallback (routeKey)
               route_key = event.get("routeKey")
               if route_key and " " in route_key:
                   return route_key.split(" ")[0]
 
               return None
 
-          def get_items(userId):
+          def get_claims(event):
+              request_context = event.get("requestContext") or {}
+              authorizer = request_context.get("authorizer") or {}
+              return authorizer.get("claims")
+
+          def get_group_id(claims):
+              # groups は環境/設定により string or list の場合があるため両対応
+              groups = claims.get("cognito:groups") if claims else None
+              if not groups:
+                  return None
+              if isinstance(groups, list):
+                  return groups[0] if len(groups) > 0 else None
+              if isinstance(groups, str):
+                  # "a,b,c" 形式の場合があるので split 対応
+                  parts = [g.strip() for g in groups.split(",") if g.strip()]
+                  return parts[0] if parts else None
+              return None
+
+          def get_items(groupId):
               resp = table.query(
-                  KeyConditionExpression=Key("userId").eq(userId),
+                  KeyConditionExpression=Key("groupId").eq(groupId),
                   ConsistentRead=True
               )
               return convert_decimal(resp.get("Items", []))
@@ -104,10 +125,7 @@ Resources:
                           "body": ""
                       }
 
-                  request_context = event.get("requestContext") or {}
-                  authorizer = request_context.get("authorizer") or {}
-                  claims = authorizer.get("claims")
-
+                  claims = get_claims(event)
                   if not claims:
                       return {
                           "statusCode": 401,
@@ -115,14 +133,21 @@ Resources:
                           "body": json.dumps({"error": "Unauthorized"})
                       }
 
-                  userId = claims["sub"]
-                  username = claims.get("cognito:username")
+                  groupId = get_group_id(claims)
+                  if not groupId:
+                      return {
+                          "statusCode": 403,
+                          "headers": CORS_HEADERS,
+                          "body": json.dumps({"error": "User has no group"})
+                      }
+
+                  username = claims.get("cognito:username") or claims.get("username")
 
                   if method == "GET":
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
+                          "body": json.dumps(get_items(groupId))
                       }
 
                   if method == "POST":
@@ -130,7 +155,7 @@ Resources:
 
                       table.put_item(
                           Item={
-                              "userId": userId,
+                              "groupId": groupId,
                               "entryId": str(uuid.uuid4()),
                               "date": body.get("date"),
                               "item": body.get("item"),
@@ -138,11 +163,10 @@ Resources:
                               "registrant": username
                           }
                       )
-
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
+                          "body": json.dumps(get_items(groupId))
                       }
 
                   if method == "DELETE":
@@ -154,10 +178,10 @@ Resources:
                               "body": json.dumps({"error": "id is required"})
                           }
 
-                      # ① 対象アイテム取得
+                      # ① 対象取得
                       resp = table.get_item(
                           Key={
-                              "userId": userId,
+                              "groupId": groupId,
                               "entryId": entryId
                           }
                       )
@@ -170,9 +194,8 @@ Resources:
                               "body": json.dumps({"error": "Item not found"})
                           }
 
-                      # ② 登録者チェック
-                      registrant = item.get("registrant")
-                      if registrant != username:
+                      # ② 登録者本人のみ削除可
+                      if item.get("registrant") != username:
                           return {
                               "statusCode": 403,
                               "headers": CORS_HEADERS,
@@ -185,7 +208,7 @@ Resources:
                       # ③ 削除
                       table.delete_item(
                           Key={
-                              "userId": userId,
+                              "groupId": groupId,
                               "entryId": entryId
                           }
                       )
@@ -193,7 +216,7 @@ Resources:
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
+                          "body": json.dumps(get_items(groupId))
                       }
 
                   return {

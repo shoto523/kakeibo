@@ -48,6 +48,7 @@ Outputs:
     Export:
       Name: KakeiboTableName
 
+
   # 新 groupId テーブル
   GroupTableName:
     Description: DynamoDB テーブル名（groupId 単位）

@@ -1,17 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 家計簿用 DynamoDB テーブル
+Description: 家計簿用 DynamoDB テーブル（Cognitoグループ単位共有）
+
 Resources:
   KakeiboTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: KakeiboTable
+      TableName: kakeibo-db
       AttributeDefinitions:
-        - AttributeName: userId
+        - AttributeName: groupId
           AttributeType: S
         - AttributeName: entryId
           AttributeType: S
       KeySchema:
-        - AttributeName: userId
+        - AttributeName: groupId
           KeyType: HASH
         - AttributeName: entryId
           KeyType: RANGE
@@ -19,7 +20,7 @@ Resources:
 
 Outputs:
   TableName:
-    Description: "DynamoDB テーブル名"
+    Description: DynamoDB テーブル名
     Value: !Ref KakeiboTable
     Export:
       Name: KakeiboTableName

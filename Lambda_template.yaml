@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL（入力バリデーション確定版）
+Description: Kakeibo Lambda FINAL（Decimal変換対応・完成版）
 
 Parameters:
   KakeiboGroupTableName:
@@ -62,11 +62,22 @@ Resources:
               "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE"
           }
 
+          def to_json(obj):
+              if isinstance(obj, list):
+                  return [to_json(i) for i in obj]
+              if isinstance(obj, dict):
+                  return {k: to_json(v) for k, v in obj.items()}
+              if isinstance(obj, Decimal):
+                  if obj % 1 == 0:
+                      return int(obj)
+                  return float(obj)
+              return obj
+
           def response(code, body):
               return {
                   "statusCode": code,
                   "headers": CORS_HEADERS,
-                  "body": json.dumps(body)
+                  "body": json.dumps(to_json(body))
               }
 
           def get_method(event):

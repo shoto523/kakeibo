@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL (Delete verification)
+Description: Kakeibo Lambda FINAL (Delete verified, HTTP/REST API compatible)
 
 Resources:
   LambdaExecutionRole:
@@ -26,7 +26,7 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:DeleteItem
                 Resource: !Sub
-                  - "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}"
+                  - arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
                   - TableName: !ImportValue KakeiboTableName
 
   KakeiboLambda:
@@ -44,7 +44,6 @@ Resources:
           import json
           import boto3
           import os
-          import uuid
           from boto3.dynamodb.conditions import Key
           from decimal import Decimal
           from botocore.exceptions import ClientError
@@ -67,10 +66,19 @@ Resources:
                   return int(obj)
               return obj
 
+          def get_http_method(event):
+              # REST API (v1)
+              if "httpMethod" in event:
+                  return event["httpMethod"]
+              # HTTP API (v2)
+              return event.get("requestContext", {}).get("http", {}).get("method")
+
           def handler(event, context):
               try:
-                  method = event.get("httpMethod")
+                  method = get_http_method(event)
+                  print("HTTP METHOD:", method)
 
+                  # ---------- OPTIONS ----------
                   if method == "OPTIONS":
                       return {
                           "statusCode": 200,
@@ -78,6 +86,7 @@ Resources:
                           "body": ""
                       }
 
+                  # ---------- Cognito ----------
                   request_context = event.get("requestContext") or {}
                   authorizer = request_context.get("authorizer") or {}
                   claims = authorizer.get("claims")
@@ -91,6 +100,7 @@ Resources:
 
                   userId = claims["sub"]
 
+                  # ---------- DELETE ----------
                   if method == "DELETE":
                       entryId = (event.get("pathParameters") or {}).get("id")
                       if not entryId:
@@ -112,9 +122,7 @@ Resources:
                           print("DELETE ERROR:", e)
                           raise
 
-                      # ★ 削除されていなければここに何も入らない
                       deleted = resp.get("Attributes")
-
                       print("DELETED ITEM:", deleted)
 
                       if not deleted:
@@ -128,7 +136,6 @@ Resources:
                               })
                           }
 
-                      # 削除後の最新一覧
                       items = table.query(
                           KeyConditionExpression=Key("userId").eq(userId),
                           ConsistentRead=True
@@ -143,7 +150,10 @@ Resources:
                   return {
                       "statusCode": 400,
                       "headers": CORS_HEADERS,
-                      "body": json.dumps({"error": "Unsupported method"})
+                      "body": json.dumps({
+                          "error": "Unsupported method",
+                          "method": method
+                      })
                   }
 
               except Exception as e:

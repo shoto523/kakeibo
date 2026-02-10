@@ -40,148 +40,149 @@ Resources:
         Variables:
           TABLE_NAME: !ImportValue KakeiboTableName
       Code:
-        ZipFile: |
-          import json
-          import boto3
-          import os
-          import uuid
-          from boto3.dynamodb.conditions import Key
-          from decimal import Decimal
+  ZipFile: |
+    import json
+    import boto3
+    import os
+    import uuid
+    from boto3.dynamodb.conditions import Key
+    from decimal import Decimal
 
-          dynamodb = boto3.resource("dynamodb")
-          table = dynamodb.Table(os.environ["TABLE_NAME"])
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(os.environ["TABLE_NAME"])
 
-          CORS_HEADERS = {
-              "Access-Control-Allow-Origin": "*",
-              "Access-Control-Allow-Headers": "Content-Type,Authorization",
-              "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE"
-          }
+    CORS_HEADERS = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE"
+    }
 
-          def convert_decimal(obj):
-              if isinstance(obj, list):
-                  return [convert_decimal(i) for i in obj]
-              if isinstance(obj, dict):
-                  return {k: convert_decimal(v) for k, v in obj.items()}
-              if isinstance(obj, Decimal):
-                  return int(obj)
-              return obj
+    def convert_decimal(obj):
+        if isinstance(obj, list):
+            return [convert_decimal(i) for i in obj]
+        if isinstance(obj, dict):
+            return {k: convert_decimal(v) for k, v in obj.items()}
+        if isinstance(obj, Decimal):
+            return int(obj)
+        return obj
 
-          def get_http_method(event):
-              # REST API
-              if "httpMethod" in event:
-                  return event["httpMethod"]
+    def get_http_method(event):
+        if "httpMethod" in event:
+            return event["httpMethod"]
 
-              # HTTP API v2
-              method = (
-                  event.get("requestContext", {})
-                       .get("http", {})
-                       .get("method")
-              )
-              if method:
-                  return method
+        method = (
+            event.get("requestContext", {})
+                 .get("http", {})
+                 .get("method")
+        )
+        if method:
+            return method
 
-              # HTTP API v2 fallback (routeKey)
-              route_key = event.get("routeKey")
-              if route_key and " " in route_key:
-                  return route_key.split(" ")[0]
+        route_key = event.get("routeKey")
+        if route_key and " " in route_key:
+            return route_key.split(" ")[0]
 
-              return None
+        return None
 
-          def get_items(userId):
-              resp = table.query(
-                  KeyConditionExpression=Key("userId").eq(userId),
-                  ConsistentRead=True
-              )
-              return convert_decimal(resp.get("Items", []))
+    def get_items(userId):
+        resp = table.query(
+            KeyConditionExpression=Key("userId").eq(userId),
+            ConsistentRead=True
+        )
+        return convert_decimal(resp.get("Items", []))
 
-          def handler(event, context):
-              try:
-                  method = get_http_method(event)
-                  print("HTTP METHOD:", method)
+    def handler(event, context):
+        try:
+            method = get_http_method(event)
+            print("HTTP METHOD:", method)
 
-                  if method is None or method == "OPTIONS":
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": ""
-                      }
+            if method is None or method == "OPTIONS":
+                return {
+                    "statusCode": 200,
+                    "headers": CORS_HEADERS,
+                    "body": ""
+                }
 
-                  request_context = event.get("requestContext") or {}
-                  authorizer = request_context.get("authorizer") or {}
-                  claims = authorizer.get("claims")
+            request_context = event.get("requestContext") or {}
+            authorizer = request_context.get("authorizer") or {}
+            claims = authorizer.get("claims")
 
-                  if not claims:
-                      return {
-                          "statusCode": 401,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps({"error": "Unauthorized"})
-                      }
+            if not claims:
+                return {
+                    "statusCode": 401,
+                    "headers": CORS_HEADERS,
+                    "body": json.dumps({"error": "Unauthorized"})
+                }
 
-                  userId = claims["sub"]
+            userId = claims["sub"]
 
-                  if method == "GET":
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
-                      }
+            if method == "GET":
+                return {
+                    "statusCode": 200,
+                    "headers": CORS_HEADERS,
+                    "body": json.dumps(get_items(userId))
+                }
 
-                  if method == "POST":
-                      body = json.loads(event.get("body") or "{}")
-                      table.put_item(
-                          Item={
-                              "userId": userId,
-                              "entryId": str(uuid.uuid4()),
-                              "date": body.get("date"),
-                              "item": body.get("item"),
-                              "amount": Decimal(str(body.get("amount")))
-                          }
-                      )
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
-                      }
+            if method == "POST":
+                body = json.loads(event.get("body") or "{}")
 
-                  if method == "DELETE":
-                      entryId = (event.get("pathParameters") or {}).get("id")
-                      if not entryId:
-                          return {
-                              "statusCode": 400,
-                              "headers": CORS_HEADERS,
-                              "body": json.dumps({"error": "id is required"})
-                          }
+                table.put_item(
+                    Item={
+                        "userId": userId,
+                        "entryId": str(uuid.uuid4()),
+                        "date": body.get("date"),
+                        "item": body.get("item"),
+                        "amount": Decimal(str(body.get("amount"))),
+                        "registrant": body.get("registrant")  # ★ 追加
+                    }
+                )
 
-                      table.delete_item(
-                          Key={
-                              "userId": userId,
-                              "entryId": entryId
-                          }
-                      )
+                return {
+                    "statusCode": 200,
+                    "headers": CORS_HEADERS,
+                    "body": json.dumps(get_items(userId))
+                }
 
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
-                      }
+            if method == "DELETE":
+                entryId = (event.get("pathParameters") or {}).get("id")
+                if not entryId:
+                    return {
+                        "statusCode": 400,
+                        "headers": CORS_HEADERS,
+                        "body": json.dumps({"error": "id is required"})
+                    }
 
-                  return {
-                      "statusCode": 400,
-                      "headers": CORS_HEADERS,
-                      "body": json.dumps({
-                          "error": "Unsupported method",
-                          "method": method
-                      })
-                  }
+                table.delete_item(
+                    Key={
+                        "userId": userId,
+                        "entryId": entryId
+                    }
+                )
 
-              except Exception as e:
-                  import traceback
-                  print(traceback.format_exc())
-                  return {
-                      "statusCode": 500,
-                      "headers": CORS_HEADERS,
-                      "body": json.dumps({"error": str(e)})
-                  }
+                return {
+                    "statusCode": 200,
+                    "headers": CORS_HEADERS,
+                    "body": json.dumps(get_items(userId))
+                }
+
+            return {
+                "statusCode": 400,
+                "headers": CORS_HEADERS,
+                "body": json.dumps({
+                    "error": "Unsupported method",
+                    "method": method
+                })
+            }
+
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return {
+                "statusCode": 500,
+                "headers": CORS_HEADERS,
+                "body": json.dumps({"error": str(e)})
+            }
+
 
 Outputs:
   LambdaArn:

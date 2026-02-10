@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL（Decimal変換対応・完成版）
+Description: Kakeibo Lambda FINAL（kakeibo-db 固定・Cognitoグループ共有）
 
 Parameters:
   KakeiboGroupTableName:
@@ -37,13 +37,13 @@ Resources:
   KakeiboLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: KakeiboLambda
+      FunctionName: KakeiboLambda   # ★ 変更禁止
       Runtime: python3.11
       Handler: index.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
-          TABLE_NAME: !Ref KakeiboGroupTableName
+          TABLE_NAME: !Ref KakeiboGroupTableName   # ★ kakeibo-db 固定
       Code:
         ZipFile: |
           import json
@@ -68,9 +68,7 @@ Resources:
               if isinstance(obj, dict):
                   return {k: to_json(v) for k, v in obj.items()}
               if isinstance(obj, Decimal):
-                  if obj % 1 == 0:
-                      return int(obj)
-                  return float(obj)
+                  return int(obj) if obj % 1 == 0 else float(obj)
               return obj
 
           def response(code, body):
@@ -79,12 +77,6 @@ Resources:
                   "headers": CORS_HEADERS,
                   "body": json.dumps(to_json(body))
               }
-
-          def get_method(event):
-              return (
-                  event.get("httpMethod")
-                  or event.get("requestContext", {}).get("http", {}).get("method")
-              )
 
           def get_group_id(claims):
               groups = claims.get("cognito:groups")
@@ -95,67 +87,88 @@ Resources:
               return None
 
           def handler(event, context):
-              try:
-                  method = get_method(event)
+              method = (
+                  event.get("httpMethod")
+                  or event.get("requestContext", {}).get("http", {}).get("method")
+              )
 
-                  if method == "OPTIONS":
-                      return response(200, {})
+              if method == "OPTIONS":
+                  return response(200, {})
 
-                  claims = event.get("requestContext", {}) \
-                                .get("authorizer", {}) \
-                                .get("claims")
-                  if not claims:
-                      return response(401, {"error": "Unauthorized"})
+              claims = event.get("requestContext", {}) \
+                            .get("authorizer", {}) \
+                            .get("claims")
+              if not claims:
+                  return response(401, {"error": "Unauthorized"})
 
-                  groupId = get_group_id(claims)
-                  if not groupId:
-                      return response(400, {"error": "groupId not found"})
+              groupId = get_group_id(claims)
+              if not groupId:
+                  return response(400, {"error": "groupId not found"})
 
-                  username = claims.get("cognito:username")
+              username = claims.get("cognito:username")
 
-                  if method == "GET":
-                      resp = table.query(
-                          KeyConditionExpression=Key("groupId").eq(groupId)
-                      )
-                      return response(200, resp.get("Items", []))
+              if method == "GET":
+                  resp = table.query(
+                      KeyConditionExpression=Key("groupId").eq(groupId)
+                  )
+                  return response(200, resp.get("Items", []))
 
-                  if method == "POST":
-                      body = json.loads(event.get("body") or "{}")
+              if method == "POST":
+                  body = json.loads(event.get("body") or "{}")
 
-                      date = body.get("date")
-                      item = body.get("item")
-                      amount_raw = body.get("amount")
+                  date = body.get("date")
+                  item = body.get("item")
+                  amount_raw = body.get("amount")
 
-                      if not date or not item or amount_raw is None:
-                          return response(400, {"error": "date, item, amount are required"})
+                  if not date or not item or amount_raw is None:
+                      return response(400, {"error": "date, item, amount are required"})
 
-                      try:
-                          amount = Decimal(str(amount_raw))
-                      except InvalidOperation:
-                          return response(400, {"error": "amount must be a number"})
+                  try:
+                      amount = Decimal(str(amount_raw))
+                  except InvalidOperation:
+                      return response(400, {"error": "amount must be a number"})
 
-                      table.put_item(
-                          Item={
-                              "groupId": groupId,
-                              "entryId": str(uuid.uuid4()),
-                              "date": date,
-                              "item": item,
-                              "amount": amount,
-                              "registrant": username
-                          }
-                      )
+                  table.put_item(
+                      Item={
+                          "groupId": groupId,
+                          "entryId": str(uuid.uuid4()),
+                          "date": date,
+                          "item": item,
+                          "amount": amount,
+                          "registrant": username
+                      }
+                  )
 
-                      resp = table.query(
-                          KeyConditionExpression=Key("groupId").eq(groupId)
-                      )
-                      return response(200, resp.get("Items", []))
+                  resp = table.query(
+                      KeyConditionExpression=Key("groupId").eq(groupId)
+                  )
+                  return response(200, resp.get("Items", []))
 
-                  return response(400, {"error": "Unsupported method"})
+              if method == "DELETE":
+                  entryId = event.get("pathParameters", {}).get("id")
+                  if not entryId:
+                      return response(400, {"error": "id required"})
 
-              except Exception as e:
-                  import traceback
-                  print(traceback.format_exc())
-                  return response(500, {"error": str(e)})
+                  item = table.get_item(
+                      Key={"groupId": groupId, "entryId": entryId}
+                  ).get("Item")
+
+                  if not item:
+                      return response(404, {"error": "not found"})
+
+                  if item.get("registrant") != username:
+                      return response(403, {"error": "forbidden"})
+
+                  table.delete_item(
+                      Key={"groupId": groupId, "entryId": entryId}
+                  )
+
+                  resp = table.query(
+                      KeyConditionExpression=Key("groupId").eq(groupId)
+                  )
+                  return response(200, resp.get("Items", []))
+
+              return response(400, {"error": "unsupported method"})
 
 Outputs:
   LambdaArn:

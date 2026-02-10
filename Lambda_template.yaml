@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 家計簿用 Lambda 関数と IAM ロール（CORS対応・LambdaプロキシON）
+Description: Kakeibo Lambda (debug table name)
 
 Resources:
   LambdaExecutionRole:
@@ -25,9 +25,7 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:PutItem
                   - dynamodb:DeleteItem
-                Resource: !Sub
-                  - "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}"
-                  - TableName: !ImportValue KakeiboTableName
+                Resource: "*"
 
   KakeiboLambda:
     Type: AWS::Lambda::Function
@@ -44,138 +42,23 @@ Resources:
           import json
           import boto3
           import os
-          import uuid
           from boto3.dynamodb.conditions import Key
-          from decimal import Decimal
-          from botocore.exceptions import ClientError
+
+          TABLE_NAME = os.environ["TABLE_NAME"]
+          print("### USING TABLE:", TABLE_NAME)
 
           dynamodb = boto3.resource("dynamodb")
-          table = dynamodb.Table(os.environ["TABLE_NAME"])
-
-          CORS_HEADERS = {
-              "Access-Control-Allow-Origin": "*",
-              "Access-Control-Allow-Headers": "Content-Type,Authorization",
-              "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE"
-          }
-
-          def convert_decimal(obj):
-              if isinstance(obj, list):
-                  return [convert_decimal(i) for i in obj]
-              if isinstance(obj, dict):
-                  return {k: convert_decimal(v) for k, v in obj.items()}
-              if isinstance(obj, Decimal):
-                  return int(obj)
-              return obj
-
-          def get_items(userId):
-              resp = table.query(
-                  KeyConditionExpression=Key("userId").eq(userId),
-                  ConsistentRead=True
-              )
-              return convert_decimal(resp.get("Items", []))
+          table = dynamodb.Table(TABLE_NAME)
 
           def handler(event, context):
-              try:
-                  method = event.get("httpMethod")
-
-                  if method == "OPTIONS":
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": ""
-                      }
-
-                  request_context = event.get("requestContext") or {}
-                  authorizer = request_context.get("authorizer") or {}
-                  claims = authorizer.get("claims")
-
-                  if not claims:
-                      return {
-                          "statusCode": 401,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps({"error": "Unauthorized"})
-                      }
-
-                  # ★ userId は sub に統一
-                  userId = claims["sub"]
-
-                  if method == "GET":
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
-                      }
-
-                  if method == "POST":
-                      body = json.loads(event.get("body") or "{}")
-                      table.put_item(
-                          Item={
-                              "userId": userId,
-                              "entryId": str(uuid.uuid4()),
-                              "date": body.get("date"),
-                              "item": body.get("item"),
-                              "amount": Decimal(str(body.get("amount")))
-                          }
-                      )
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
-                      }
-
-                  if method == "DELETE":
-                      entryId = (event.get("pathParameters") or {}).get("id")
-                      if not entryId:
-                          return {
-                              "statusCode": 400,
-                              "headers": CORS_HEADERS,
-                              "body": json.dumps({"error": "id is required"})
-                          }
-
-                      try:
-                          table.delete_item(
-                              Key={
-                                  "userId": userId,
-                                  "entryId": entryId
-                              },
-                              ConditionExpression="attribute_exists(entryId)"
-                          )
-                      except ClientError as e:
-                          if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                              return {
-                                  "statusCode": 404,
-                                  "headers": CORS_HEADERS,
-                                  "body": json.dumps({
-                                      "error": "Item not found",
-                                      "userId": userId,
-                                      "entryId": entryId
-                                  })
-                              }
-                          raise
-
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(userId))
-                      }
-
-                  return {
-                      "statusCode": 400,
-                      "headers": CORS_HEADERS,
-                      "body": json.dumps({"error": "Unsupported method"})
-                  }
-
-              except Exception as e:
-                  import traceback
-                  print(traceback.format_exc())
-                  return {
-                      "statusCode": 500,
-                      "headers": CORS_HEADERS,
-                      "body": json.dumps({"error": str(e)})
-                  }
+              print("EVENT:", json.dumps(event))
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps({
+                      "table": TABLE_NAME
+                  })
+              }
 
 Outputs:
   LambdaArn:
     Value: !GetAtt KakeiboLambda.Arn
-    Export:
-      Name: KakeiboLambdaArn

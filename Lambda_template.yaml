@@ -47,6 +47,7 @@ Resources:
           import uuid
           from boto3.dynamodb.conditions import Key
           from decimal import Decimal
+          from botocore.exceptions import ClientError
 
           dynamodb = boto3.resource("dynamodb")
           table = dynamodb.Table(os.environ["TABLE_NAME"])
@@ -95,8 +96,8 @@ Resources:
                           "body": json.dumps({"error": "Unauthorized"})
                       }
 
-                  # ★ ここが重要：sub → cognito:username
-                  userId = claims["cognito:username"]
+                  # ★ userId は sub に統一
+                  userId = claims["sub"]
 
                   if method == "GET":
                       return {
@@ -131,12 +132,26 @@ Resources:
                               "body": json.dumps({"error": "id is required"})
                           }
 
-                      table.delete_item(
-                          Key={
-                              "userId": userId,
-                              "entryId": entryId
-                          }
-                      )
+                      try:
+                          table.delete_item(
+                              Key={
+                                  "userId": userId,
+                                  "entryId": entryId
+                              },
+                              ConditionExpression="attribute_exists(entryId)"
+                          )
+                      except ClientError as e:
+                          if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                              return {
+                                  "statusCode": 404,
+                                  "headers": CORS_HEADERS,
+                                  "body": json.dumps({
+                                      "error": "Item not found",
+                                      "userId": userId,
+                                      "entryId": entryId
+                                  })
+                              }
+                          raise
 
                       return {
                           "statusCode": 200,

@@ -1,5 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL (Cognitoグループ単位で共有 / 登録者本人のみ削除可)
+Description: Kakeibo Lambda FINAL (Cognitoグループ単位共有 / 登録者本人のみ削除)
+
+Parameters:
+  KakeiboTableName:
+    Type: String
+    Default: kakeibo-db
 
 Resources:
   LambdaExecutionRole:
@@ -26,9 +31,8 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:GetItem
                   - dynamodb:DeleteItem
-                Resource: !Sub
-                  - arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
-                  - TableName: !ImportValue KakeiboTableName
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${KakeiboTableName}
 
   KakeiboLambda:
     Type: AWS::Lambda::Function
@@ -39,7 +43,7 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
-          TABLE_NAME: !ImportValue KakeiboTableName
+          TABLE_NAME: !Ref KakeiboTableName
       Code:
         ZipFile: |
           import json
@@ -68,42 +72,25 @@ Resources:
               return obj
 
           def get_http_method(event):
-              # REST API
               if "httpMethod" in event:
                   return event["httpMethod"]
-
-              # HTTP API v2
-              method = (
-                  event.get("requestContext", {})
-                       .get("http", {})
-                       .get("method")
-              )
+              method = event.get("requestContext", {}).get("http", {}).get("method")
               if method:
                   return method
-
-              # HTTP API v2 fallback (routeKey)
               route_key = event.get("routeKey")
               if route_key and " " in route_key:
                   return route_key.split(" ")[0]
-
               return None
 
           def get_claims(event):
-              request_context = event.get("requestContext") or {}
-              authorizer = request_context.get("authorizer") or {}
-              return authorizer.get("claims")
+              return event.get("requestContext", {}).get("authorizer", {}).get("claims")
 
           def get_group_id(claims):
-              # groups は環境/設定により string or list の場合があるため両対応
-              groups = claims.get("cognito:groups") if claims else None
-              if not groups:
-                  return None
-              if isinstance(groups, list):
-                  return groups[0] if len(groups) > 0 else None
+              groups = claims.get("cognito:groups")
+              if isinstance(groups, list) and groups:
+                  return groups[0]
               if isinstance(groups, str):
-                  # "a,b,c" 形式の場合があるので split 対応
-                  parts = [g.strip() for g in groups.split(",") if g.strip()]
-                  return parts[0] if parts else None
+                  return groups.split(",")[0]
               return None
 
           def get_items(groupId):
@@ -116,43 +103,25 @@ Resources:
           def handler(event, context):
               try:
                   method = get_http_method(event)
-                  print("HTTP METHOD:", method)
 
                   if method is None or method == "OPTIONS":
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": ""
-                      }
+                      return {"statusCode": 200, "headers": CORS_HEADERS, "body": ""}
 
                   claims = get_claims(event)
                   if not claims:
-                      return {
-                          "statusCode": 401,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps({"error": "Unauthorized"})
-                      }
+                      return {"statusCode": 401, "headers": CORS_HEADERS, "body": json.dumps({"error": "Unauthorized"})}
 
                   groupId = get_group_id(claims)
                   if not groupId:
-                      return {
-                          "statusCode": 403,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps({"error": "User has no group"})
-                      }
+                      return {"statusCode": 403, "headers": CORS_HEADERS, "body": json.dumps({"error": "No group"})}
 
-                  username = claims.get("cognito:username") or claims.get("username")
+                  username = claims.get("cognito:username")
 
                   if method == "GET":
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(groupId))
-                      }
+                      return {"statusCode": 200, "headers": CORS_HEADERS, "body": json.dumps(get_items(groupId))}
 
                   if method == "POST":
                       body = json.loads(event.get("body") or "{}")
-
                       table.put_item(
                           Item={
                               "groupId": groupId,
@@ -163,82 +132,24 @@ Resources:
                               "registrant": username
                           }
                       )
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(groupId))
-                      }
+                      return {"statusCode": 200, "headers": CORS_HEADERS, "body": json.dumps(get_items(groupId))}
 
                   if method == "DELETE":
-                      entryId = (event.get("pathParameters") or {}).get("id")
-                      if not entryId:
-                          return {
-                              "statusCode": 400,
-                              "headers": CORS_HEADERS,
-                              "body": json.dumps({"error": "id is required"})
-                          }
-
-                      # ① 対象取得
-                      resp = table.get_item(
-                          Key={
-                              "groupId": groupId,
-                              "entryId": entryId
-                          }
-                      )
-
+                      entryId = event.get("pathParameters", {}).get("id")
+                      resp = table.get_item(Key={"groupId": groupId, "entryId": entryId})
                       item = resp.get("Item")
-                      if not item:
-                          return {
-                              "statusCode": 404,
-                              "headers": CORS_HEADERS,
-                              "body": json.dumps({"error": "Item not found"})
-                          }
+                      if not item or item.get("registrant") != username:
+                          return {"statusCode": 403, "headers": CORS_HEADERS, "body": json.dumps({"error": "Forbidden"})}
+                      table.delete_item(Key={"groupId": groupId, "entryId": entryId})
+                      return {"statusCode": 200, "headers": CORS_HEADERS, "body": json.dumps(get_items(groupId))}
 
-                      # ② 登録者本人のみ削除可
-                      if item.get("registrant") != username:
-                          return {
-                              "statusCode": 403,
-                              "headers": CORS_HEADERS,
-                              "body": json.dumps({
-                                  "error": "Forbidden",
-                                  "message": "You are not allowed to delete this item"
-                              })
-                          }
-
-                      # ③ 削除
-                      table.delete_item(
-                          Key={
-                              "groupId": groupId,
-                              "entryId": entryId
-                          }
-                      )
-
-                      return {
-                          "statusCode": 200,
-                          "headers": CORS_HEADERS,
-                          "body": json.dumps(get_items(groupId))
-                      }
-
-                  return {
-                      "statusCode": 400,
-                      "headers": CORS_HEADERS,
-                      "body": json.dumps({
-                          "error": "Unsupported method",
-                          "method": method
-                      })
-                  }
+                  return {"statusCode": 400, "headers": CORS_HEADERS, "body": json.dumps({"error": "Unsupported"})}
 
               except Exception as e:
                   import traceback
                   print(traceback.format_exc())
-                  return {
-                      "statusCode": 500,
-                      "headers": CORS_HEADERS,
-                      "body": json.dumps({"error": str(e)})
-                  }
+                  return {"statusCode": 500, "headers": CORS_HEADERS, "body": json.dumps({"error": str(e)})}
 
 Outputs:
   LambdaArn:
     Value: !GetAtt KakeiboLambda.Arn
-    Export:
-      Name: KakeiboLambdaArn

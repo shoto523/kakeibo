@@ -95,7 +95,8 @@ Resources:
                           "body": json.dumps({"error": "Unauthorized"})
                       }
 
-                  userId = claims["sub"]
+                  # ★ ここが重要：sub → cognito:username
+                  userId = claims["cognito:username"]
 
                   if method == "GET":
                       return {
@@ -137,7 +138,6 @@ Resources:
                           }
                       )
 
-                      # ★ 削除後の最新一覧を返す
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,

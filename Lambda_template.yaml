@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL (HTTP API v2 routeKey対応)
+Description: Kakeibo Lambda FINAL (登録者本人のみ削除可)
 
 Resources:
   LambdaExecutionRole:
@@ -24,6 +24,7 @@ Resources:
                 Action:
                   - dynamodb:Query
                   - dynamodb:PutItem
+                  - dynamodb:GetItem
                   - dynamodb:DeleteItem
                 Resource: !Sub
                   - arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
@@ -67,11 +68,9 @@ Resources:
               return obj
 
           def get_http_method(event):
-              # REST API
               if "httpMethod" in event:
                   return event["httpMethod"]
 
-              # HTTP API v2
               method = (
                   event.get("requestContext", {})
                        .get("http", {})
@@ -80,7 +79,6 @@ Resources:
               if method:
                   return method
 
-              # HTTP API v2 fallback (routeKey)
               route_key = event.get("routeKey")
               if route_key and " " in route_key:
                   return route_key.split(" ")[0]
@@ -118,6 +116,7 @@ Resources:
                       }
 
                   userId = claims["sub"]
+                  username = claims.get("cognito:username")
 
                   if method == "GET":
                       return {
@@ -128,6 +127,7 @@ Resources:
 
                   if method == "POST":
                       body = json.loads(event.get("body") or "{}")
+
                       table.put_item(
                           Item={
                               "userId": userId,
@@ -135,9 +135,10 @@ Resources:
                               "date": body.get("date"),
                               "item": body.get("item"),
                               "amount": Decimal(str(body.get("amount"))),
-                              "registrant": body.get("registrant")  # ★ 追加
+                              "registrant": username
                           }
                       )
+
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
@@ -153,6 +154,35 @@ Resources:
                               "body": json.dumps({"error": "id is required"})
                           }
 
+                      # ① 対象アイテム取得
+                      resp = table.get_item(
+                          Key={
+                              "userId": userId,
+                              "entryId": entryId
+                          }
+                      )
+
+                      item = resp.get("Item")
+                      if not item:
+                          return {
+                              "statusCode": 404,
+                              "headers": CORS_HEADERS,
+                              "body": json.dumps({"error": "Item not found"})
+                          }
+
+                      # ② 登録者チェック
+                      registrant = item.get("registrant")
+                      if registrant != username:
+                          return {
+                              "statusCode": 403,
+                              "headers": CORS_HEADERS,
+                              "body": json.dumps({
+                                  "error": "Forbidden",
+                                  "message": "You are not allowed to delete this item"
+                              })
+                          }
+
+                      # ③ 削除
                       table.delete_item(
                           Key={
                               "userId": userId,

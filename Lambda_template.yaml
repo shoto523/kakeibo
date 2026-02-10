@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Kakeibo Lambda FINAL (Delete verified, HTTP/REST API compatible)
+Description: Kakeibo Lambda FINAL (GET/POST/DELETE unified)
 
 Resources:
   LambdaExecutionRole:
@@ -44,6 +44,7 @@ Resources:
           import json
           import boto3
           import os
+          import uuid
           from boto3.dynamodb.conditions import Key
           from decimal import Decimal
           from botocore.exceptions import ClientError
@@ -67,18 +68,22 @@ Resources:
               return obj
 
           def get_http_method(event):
-              # REST API (v1)
               if "httpMethod" in event:
                   return event["httpMethod"]
-              # HTTP API (v2)
               return event.get("requestContext", {}).get("http", {}).get("method")
+
+          def get_items(userId):
+              resp = table.query(
+                  KeyConditionExpression=Key("userId").eq(userId),
+                  ConsistentRead=True
+              )
+              return convert_decimal(resp.get("Items", []))
 
           def handler(event, context):
               try:
                   method = get_http_method(event)
                   print("HTTP METHOD:", method)
 
-                  # ---------- OPTIONS ----------
                   if method == "OPTIONS":
                       return {
                           "statusCode": 200,
@@ -86,7 +91,6 @@ Resources:
                           "body": ""
                       }
 
-                  # ---------- Cognito ----------
                   request_context = event.get("requestContext") or {}
                   authorizer = request_context.get("authorizer") or {}
                   claims = authorizer.get("claims")
@@ -100,6 +104,32 @@ Resources:
 
                   userId = claims["sub"]
 
+                  # ---------- GET ----------
+                  if method == "GET":
+                      return {
+                          "statusCode": 200,
+                          "headers": CORS_HEADERS,
+                          "body": json.dumps(get_items(userId))
+                      }
+
+                  # ---------- POST ----------
+                  if method == "POST":
+                      body = json.loads(event.get("body") or "{}")
+                      table.put_item(
+                          Item={
+                              "userId": userId,
+                              "entryId": str(uuid.uuid4()),
+                              "date": body.get("date"),
+                              "item": body.get("item"),
+                              "amount": Decimal(str(body.get("amount")))
+                          }
+                      )
+                      return {
+                          "statusCode": 200,
+                          "headers": CORS_HEADERS,
+                          "body": json.dumps(get_items(userId))
+                      }
+
                   # ---------- DELETE ----------
                   if method == "DELETE":
                       entryId = (event.get("pathParameters") or {}).get("id")
@@ -110,17 +140,13 @@ Resources:
                               "body": json.dumps({"error": "id is required"})
                           }
 
-                      try:
-                          resp = table.delete_item(
-                              Key={
-                                  "userId": userId,
-                                  "entryId": entryId
-                              },
-                              ReturnValues="ALL_OLD"
-                          )
-                      except ClientError as e:
-                          print("DELETE ERROR:", e)
-                          raise
+                      resp = table.delete_item(
+                          Key={
+                              "userId": userId,
+                              "entryId": entryId
+                          },
+                          ReturnValues="ALL_OLD"
+                      )
 
                       deleted = resp.get("Attributes")
                       print("DELETED ITEM:", deleted)
@@ -129,22 +155,13 @@ Resources:
                           return {
                               "statusCode": 404,
                               "headers": CORS_HEADERS,
-                              "body": json.dumps({
-                                  "error": "Item not found",
-                                  "userId": userId,
-                                  "entryId": entryId
-                              })
+                              "body": json.dumps({"error": "Item not found"})
                           }
-
-                      items = table.query(
-                          KeyConditionExpression=Key("userId").eq(userId),
-                          ConsistentRead=True
-                      )["Items"]
 
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(convert_decimal(items))
+                          "body": json.dumps(get_items(userId))
                       }
 
                   return {

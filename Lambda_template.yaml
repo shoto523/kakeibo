@@ -66,13 +66,17 @@ Resources:
                   return int(obj)
               return obj
 
+          def get_items(userId):
+              resp = table.query(
+                  KeyConditionExpression=Key("userId").eq(userId),
+                  ConsistentRead=True
+              )
+              return convert_decimal(resp.get("Items", []))
+
           def handler(event, context):
               try:
                   method = event.get("httpMethod")
 
-                  # =======================
-                  # OPTIONS (CORS preflight)
-                  # =======================
                   if method == "OPTIONS":
                       return {
                           "statusCode": 200,
@@ -80,9 +84,6 @@ Resources:
                           "body": ""
                       }
 
-                  # =======================
-                  # Cognito 認証チェック（安全版）
-                  # =======================
                   request_context = event.get("requestContext") or {}
                   authorizer = request_context.get("authorizer") or {}
                   claims = authorizer.get("claims")
@@ -96,54 +97,32 @@ Resources:
 
                   userId = claims["sub"]
 
-                  # =======================
-                  # 一覧取得
-                  # =======================
                   if method == "GET":
-                      resp = table.query(
-                          KeyConditionExpression=Key("userId").eq(userId)
-                      )
-                      items = convert_decimal(resp.get("Items", []))
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(items)
+                          "body": json.dumps(get_items(userId))
                       }
 
-                  # =======================
-                  # 追加
-                  # =======================
                   if method == "POST":
                       body = json.loads(event.get("body") or "{}")
-                      entryId = str(uuid.uuid4())
-
                       table.put_item(
                           Item={
                               "userId": userId,
-                              "entryId": entryId,
+                              "entryId": str(uuid.uuid4()),
                               "date": body.get("date"),
                               "item": body.get("item"),
                               "amount": Decimal(str(body.get("amount")))
                           }
                       )
-
-                      resp = table.query(
-                          KeyConditionExpression=Key("userId").eq(userId)
-                      )
-                      items = convert_decimal(resp.get("Items", []))
-
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps(items)
+                          "body": json.dumps(get_items(userId))
                       }
 
-                  # =======================
-                  # 削除
-                  # =======================
                   if method == "DELETE":
                       entryId = (event.get("pathParameters") or {}).get("id")
-
                       if not entryId:
                           return {
                               "statusCode": 400,
@@ -158,15 +137,13 @@ Resources:
                           }
                       )
 
+                      # ★ 削除後の最新一覧を返す
                       return {
                           "statusCode": 200,
                           "headers": CORS_HEADERS,
-                          "body": json.dumps({"message": "deleted"})
+                          "body": json.dumps(get_items(userId))
                       }
 
-                  # =======================
-                  # Unsupported
-                  # =======================
                   return {
                       "statusCode": 400,
                       "headers": CORS_HEADERS,

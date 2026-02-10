@@ -31,6 +31,8 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:GetItem
                   - dynamodb:DeleteItem
+                  # ★ 追加: 一括精算で UpdateItem を使う
+                  - dynamodb:UpdateItem
                 Resource:
                   - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${KakeiboGroupTableName}
 
@@ -52,6 +54,7 @@ Resources:
           import uuid
           from boto3.dynamodb.conditions import Key
           from decimal import Decimal, InvalidOperation
+          from botocore.exceptions import ClientError  # ★ 追加
 
           dynamodb = boto3.resource("dynamodb")
           table = dynamodb.Table(os.environ["TABLE_NAME"])
@@ -59,7 +62,8 @@ Resources:
           CORS_HEADERS = {
               "Access-Control-Allow-Origin": "*",
               "Access-Control-Allow-Headers": "Content-Type,Authorization",
-              "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE"
+              # ★ 追加: PUT を許可
+              "Access-Control-Allow-Methods": "OPTIONS,GET,POST,DELETE,PUT"
           }
 
           def to_json(obj):
@@ -86,6 +90,15 @@ Resources:
                   return groups
               return None
 
+          def get_path(event):
+              # API Gateway (REST or HTTP) 双方に対応できるよう複数候補を見る
+              return (
+                  event.get("path")
+                  or event.get("rawPath")
+                  or event.get("requestContext", {}).get("http", {}).get("path")
+                  or ""
+              )
+
           def handler(event, context):
               method = (
                   event.get("httpMethod")
@@ -106,6 +119,7 @@ Resources:
                   return response(400, {"error": "groupId not found"})
 
               username = claims.get("cognito:username")
+              path = get_path(event)
 
               if method == "GET":
                   resp = table.query(
@@ -135,9 +149,42 @@ Resources:
                           "date": date,
                           "item": item,
                           "amount": amount,
-                          "registrant": username
+                          "registrant": username,
+                          # ★ 追加: 未精算で初期化
+                          "isSettled": False
                       }
                   )
+
+                  resp = table.query(
+                      KeyConditionExpression=Key("groupId").eq(groupId)
+                  )
+                  return response(200, resp.get("Items", []))
+
+              if method == "PUT" and path.endswith("/settle"):
+                  # ★ 追加: 一括精算 API
+                  body = json.loads(event.get("body") or "{}")
+                  entry_ids = body.get("entryIds") or []
+
+                  if not isinstance(entry_ids, list) or not entry_ids:
+                      return response(400, {"error": "entryIds must be a non-empty array"})
+
+                  for entry_id in entry_ids:
+                      try:
+                          table.update_item(
+                              Key={"groupId": groupId, "entryId": entry_id},
+                              UpdateExpression="SET isSettled = :true",
+                              # 既に True のものは無視（更新しない）
+                              ConditionExpression="attribute_not_exists(isSettled) OR isSettled = :false",
+                              ExpressionAttributeValues={
+                                  ":true": True,
+                                  ":false": False
+                              }
+                          )
+                      except ClientError as e:
+                          # 条件不一致（既に精算済み）などはスキップ
+                          if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                              # 想定外のエラーは返す
+                              return response(500, {"error": "update failed", "detail": str(e)})
 
                   resp = table.query(
                       KeyConditionExpression=Key("groupId").eq(groupId)
